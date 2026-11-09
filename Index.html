@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Build Logic - RGB Video Converter</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #0e1117;
+            color: #e6edf3;
+            font-family: Arial, sans-serif;
+            padding: 30px;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            max-width: 700px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        header { text-align: center; }
+        h1 { color: #58a6ff; margin-bottom: 8px; }
+        .card {
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input[type="file"], select {
+            width: 100%;
+            padding: 10px;
+            background: #0d1117;
+            color: #fff;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        .screen-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+        canvas {
+            background: #000;
+            border: 2px solid #58a6ff;
+            image-rendering: pixelated;
+        }
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        button {
+            background-color: #238636;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background-color: #2ea043; }
+        textarea {
+            width: 100%;
+            height: 120px;
+            background: #0d1117;
+            color: #79c0ff;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 10px;
+            font-family: monospace;
+            resize: vertical;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Build Logic RGB Player</h1>
+        <p>Convert videos into Build Logic RGB panel pixel arrays.</p>
+    </header>
+
+    <!-- Upload Section -->
+    <div class="card">
+        <label>1. Select a Video (.mp4, .webm):</label>
+        <input type="file" id="videoUpload" accept="video/*">
+
+        <label>2. Choose Panel Grid Size:</label>
+        <select id="gridSize">
+            <option value="16">16 x 16 (256 pixels - Fast)</option>
+            <option value="32" selected>32 x 32 (1,024 pixels - Standard)</option>
+            <option value="48">48 x 48 (2,304 pixels)</option>
+        </select>
+    </div>
+
+    <!-- Hidden Video Player used to read frames -->
+    <video id="hiddenVideo" style="display:none;" playsinline muted></video>
+
+    <!-- Screen Preview -->
+    <div class="card screen-container">
+        <h3>Simulated In-Game RGB Panel</h3>
+        <canvas id="displayCanvas" width="320" height="320"></canvas>
+
+        <div class="btn-row">
+            <button id="playBtn" onclick="togglePlay()">Play / Pause</button>
+            <button onclick="copyCurrentFrame()">Copy Current Frame for Build Logic</button>
+        </div>
+    </div>
+
+    <!-- Output Section -->
+    <div class="card">
+        <label>Build Logic Color Array (24-bit RGB):</label>
+        <textarea id="outputData" readonly placeholder="Click 'Copy Current Frame' to generate data to paste in-game..."></textarea>
+    </div>
+</div>
+
+<script>
+    const fileInput = document.getElementById('videoUpload');
+    const video = document.getElementById('hiddenVideo');
+    const canvas = document.getElementById('displayCanvas');
+    const ctx = canvas.getContext('2d');
+    const outputData = document.getElementById('outputData');
+    const gridSizeSelect = document.getElementById('gridSize');
+
+    // Canvas used for pixel sampling
+    const sampleCanvas = document.createElement('canvas');
+    const sampleCtx = sampleCanvas.getContext('2d');
+
+    let isPlaying = false;
+    let animFrameId = null;
+
+    // Load selected video
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            video.src = URL.createObjectURL(file);
+            video.load();
+            video.onloadeddata = () => {
+                video.currentTime = 0;
+                drawCurrentFrame();
+            };
+        }
+    });
+
+    gridSizeSelect.addEventListener('change', () => {
+        drawCurrentFrame();
+    });
+
+    function togglePlay() {
+        if (!video.src) {
+            alert("Please select a video file first!");
+            return;
+        }
+
+        if (isPlaying) {
+            video.pause();
+            cancelAnimationFrame(animFrameId);
+            isPlaying = false;
+        } else {
+            video.play();
+            isPlaying = true;
+            renderLoop();
+        }
+    }
+
+    function renderLoop() {
+        if (!video.paused && !video.ended) {
+            drawCurrentFrame();
+            animFrameId = requestAnimationFrame(renderLoop);
+        } else {
+            isPlaying = false;
+        }
+    }
+
+    function drawCurrentFrame() {
+        const size = parseInt(gridSizeSelect.value, 10);
+        sampleCanvas.width = size;
+        sampleCanvas.height = size;
+
+        // Downscale video frame into sample canvas
+        sampleCtx.drawImage(video, 0, 0, size, size);
+        const imgData = sampleCtx.getImageData(0, 0, size, size).data;
+
+        // Draw upscale grid to the visible display canvas
+        const pixelW = canvas.width / size;
+        const pixelH = canvas.height / size;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        for (let i = 0; i < imgData.length; i += 4) {
+            const r = imgData[i];
+            const g = imgData[i + 1];
+            const b = imgData[i + 2];
+
+            const index = i / 4;
+            const x = (index % size) * pixelW;
+            const y = Math.floor(index / size) * pixelH;
+
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(x, y, pixelW, pixelH);
+        }
+    }
+
+    function copyCurrentFrame() {
+        const size = parseInt(gridSizeSelect.value, 10);
+        sampleCanvas.width = size;
+        sampleCanvas.height = size;
+        sampleCtx.drawImage(video, 0, 0, size, size);
+        const imgData = sampleCtx.getImageData(0, 0, size, size).data;
+
+        const packedArray = [];
+
+        // Convert to 24-bit integer values used by Build Logic: (R*65536 + G*256 + B)
+        for (let i = 0; i < imgData.length; i += 4) {
+            const r = imgData[i];
+            const g = imgData[i + 1];
+            const b = imgData[i + 2];
+            const packed = (r << 16) | (g << 8) | b;
+            packedArray.push(packed);
+        }
+
+        const resultString = JSON.stringify(packedArray);
+        outputData.value = resultString;
+        navigator.clipboard.writeText(resultString);
+        alert("Copied frame pixel array to clipboard!");
+    }
+</script>
+
+</body>
+</html>
